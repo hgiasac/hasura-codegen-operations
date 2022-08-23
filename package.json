@@ -1,0 +1,32 @@
+{
+  "name": "hasura-codegen-operations",
+  "version": "0.0.1-alpha.2",
+  "description": "A graphql codegen tool for hasura operations",
+  "main": "dist/index.js",
+  "bin": "dist/index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [
+    "hasura",
+    "codegen",
+    "cli"
+  ],
+  "author": "Toan Nguyen",
+  "license": "MIT",
+  "dependencies": {
+    "@graphql-codegen/core": "^2.6.2",
+    "@graphql-codegen/plugin-helpers": "^2.6.2",
+    "@graphql-tools/load": "^7.7.4",
+    "@graphql-tools/url-loader": "^7.13.8",
+    "dotenv": "^16.0.1",
+    "enquirer": "^2.3.6",
+    "graphql-codegen-hasura-operations": "^0.0.1-alpha.2",
+    "string-env-interpolation": "^1.0.1",
+    "yaml": "^2.1.1"
+  },
+  "devDependencies": {
+    "@types/node": "^18.7.3",
+    "typescript": "^4.7.4"
+  }
+}
