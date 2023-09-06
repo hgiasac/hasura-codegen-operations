@@ -1,10 +1,12 @@
 {
   "name": "hasura-codegen-operations",
-  "version": "0.0.1-alpha.2",
+  "version": "0.0.1-alpha.3",
   "description": "A graphql codegen tool for hasura operations",
   "main": "dist/index.js",
   "bin": "dist/index.js",
   "scripts": {
+    "build": "tsc",
+    "prepublishOnly": "npm run build",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "keywords": [
@@ -15,18 +17,20 @@
   "author": "Toan Nguyen",
   "license": "MIT",
   "dependencies": {
-    "@graphql-codegen/core": "^2.6.2",
-    "@graphql-codegen/plugin-helpers": "^2.6.2",
-    "@graphql-tools/load": "^7.7.4",
-    "@graphql-tools/url-loader": "^7.13.8",
-    "dotenv": "^16.0.1",
-    "enquirer": "^2.3.6",
-    "graphql-codegen-hasura-operations": "^0.0.1-alpha.2",
+    "@graphql-codegen/core": "^4.0.0",
+    "@graphql-codegen/plugin-helpers": "^5.0.1",
+    "@graphql-tools/load": "^8.0.0",
+    "@graphql-tools/url-loader": "^8.0.0",
+    "dotenv": "^16.3.1",
+    "enquirer": "^2.4.1",
+    "graphql-codegen-hasura-operations": "^0.0.1-alpha.3",
     "string-env-interpolation": "^1.0.1",
-    "yaml": "^2.1.1"
+    "yaml": "^2.3.2",
+    "yargs": "^17.7.2"
   },
   "devDependencies": {
-    "@types/node": "^18.7.3",
-    "typescript": "^4.7.4"
+    "@types/node": "^20.5.9",
+    "@types/yargs": "^17.0.24",
+    "typescript": "^5.2.2"
   }
 }
