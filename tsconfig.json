@@ -10,7 +10,6 @@
     "module": "CommonJS",
     "target": "ES5",
     "lib": ["es6", "esnext", "es2015", "dom"],
-    "suppressImplicitAnyIndexErrors": true,
     "moduleResolution": "node",
     "emitDecoratorMetadata": true,
     "sourceMap": false,
@@ -20,6 +19,6 @@
     "noImplicitReturns": true,
     "noUnusedLocals": true,
     "resolveJsonModule": true,
-    "skipLibCheck": true,
+    "skipLibCheck": true
   }
 }
