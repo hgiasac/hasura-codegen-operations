@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import { readFileSync, writeFileSync, existsSync } from "fs";
+import { readFileSync, writeFileSync, existsSync, mkdirSync } from "fs";
 import path from "path";
 import { printSchema, parse } from "graphql";
 import * as hasuraPlugin from "graphql-codegen-hasura-operations";
@@ -15,12 +15,38 @@ import { prompt } from "enquirer";
 import yargs from "yargs/yargs";
 import { hideBin } from "yargs/helpers";
 
+type QuestionResult = {
+  url: string;
+  adminSecret: string;
+  role: string;
+  models: string;
+  maxDepth: number;
+  enableSubfieldArgs: boolean;
+  disableFragments: boolean;
+  disableArgSuffixes: string;
+  outputPath: string;
+  outputFilePrefix: string;
+  enableQuery: boolean;
+  enableMutation: boolean;
+  enableSubscription: boolean;
+  separateFiles: boolean;
+};
+
+type DefaultOptions = Omit<QuestionResult, "disableArgSuffixes"> & {
+  headers: Record<string, string>;
+  method: string;
+  disableArgSuffixes: string[];
+};
+
+const PATTERN_NAMES_WITH_COMMA = /\w+(,\w+)?/;
+
 const bootstrap = async () => {
   const argv = await yargs(hideBin(process.argv)).argv;
+
   const envOutput = dotenvConfig();
 
   if (envOutput.error) {
-    console.warn(envOutput.error);
+    console.warn(envOutput.error.message);
   }
 
   let codegenConfigFile =
@@ -39,22 +65,19 @@ const bootstrap = async () => {
       "utf-8"
     );
 
-    const interpolationConfig = envOutput.parsed
-      ? env(configString, envOutput.parsed || {})
-      : configString;
+    const interpolationConfig = env(configString, envOutput.parsed || {});
     configYaml = parseYaml(interpolationConfig);
   } else {
     console.warn("WARNING: the config file is not found");
   }
 
-  let url: string;
-  let headers: Record<string, string> = {};
-  let method = "POST";
+  const defaultConfigs = ((configYaml as unknown as Record<string, string>)
+    .hasura ?? {}) as Partial<DefaultOptions>;
 
   if (configYaml.schema) {
     switch (typeof configYaml.schema) {
       case "string":
-        url = configYaml.schema;
+        defaultConfigs.url = configYaml.schema;
         break;
       case "object":
         if (!Array.isArray(configYaml.schema)) {
@@ -64,9 +87,19 @@ const bootstrap = async () => {
         }
 
         const schemaConfig = configYaml.schema[0];
-        url = Object.keys(schemaConfig)[0];
-        headers = schemaConfig[url].headers;
-        method = schemaConfig[url].method || "POST";
+        const url = Object.keys(schemaConfig)[0];
+        defaultConfigs.url = url;
+        defaultConfigs.headers = schemaConfig[url].headers;
+        defaultConfigs.method = schemaConfig[url].method || "POST";
+        if (defaultConfigs.headers) {
+          if (defaultConfigs.headers["x-hasura-admin-secret"]) {
+            defaultConfigs.adminSecret =
+              defaultConfigs.headers["x-hasura-admin-secret"];
+          }
+          if (defaultConfigs.headers["x-hasura-role"]) {
+            defaultConfigs.role = defaultConfigs.headers["x-hasura-role"];
+          }
+        }
         break;
       default:
         throw new Error(
@@ -75,25 +108,28 @@ const bootstrap = async () => {
     }
   }
 
-  const basePath =
-    (configYaml as unknown as Record<string, string>).basePath || ".";
-
   const questions = [
-    !url
+    !defaultConfigs.url
       ? {
           type: "input",
           name: "url",
           message: "What is the graphql endpoint?",
+          validate(value: string): string | boolean {
+            if (!value) {
+              return "the graphql endpoint url is required";
+            }
+            return true;
+          },
         }
       : null,
-    !headers["x-hasura-admin-secret"]
+    !defaultConfigs.adminSecret
       ? {
           type: "input",
           name: "adminSecret",
           message: "What is the admin secret?",
         }
       : null,
-    !headers["x-hasura-role"]
+    !defaultConfigs.role
       ? {
           type: "input",
           name: "role",
@@ -103,20 +139,44 @@ const bootstrap = async () => {
       : null,
     {
       type: "input",
-      name: "tables",
+      name: "models",
       message: "What models do you need to generate? (separated by comma)",
+      validate(value: string): string | boolean {
+        if (!value || !PATTERN_NAMES_WITH_COMMA.test(value)) {
+          return "models value is empty or invalid format";
+        }
+        return true;
+      },
     },
     {
       type: "numeral",
       name: "maxDepth",
       message: "What is the max depth of output sub-fields?",
-      initial: 1,
+      initial: defaultConfigs.maxDepth ?? 1,
+      validate(value: unknown) {
+        const message = "maxDepth must be larger than 0";
+        try {
+          if (!value) {
+            return message;
+          }
+
+          const numberValue =
+            typeof value === "number" ? value : parseInt(value as string, 10);
+          if (numberValue <= 0) {
+            return message;
+          }
+
+          return true;
+        } catch {
+          return message;
+        }
+      },
     },
     {
       type: "toggle",
       name: "enableQuery",
       message: "Enable queries?",
-      initial: true,
+      initial: defaultConfigs.enableQuery ?? true,
       enabled: "Yep",
       disabled: "Nope",
     },
@@ -124,7 +184,7 @@ const bootstrap = async () => {
       type: "toggle",
       name: "enableMutation",
       message: "Enable mutations?",
-      initial: true,
+      initial: defaultConfigs.enableMutation ?? true,
       enabled: "Yep",
       disabled: "Nope",
     },
@@ -132,7 +192,7 @@ const bootstrap = async () => {
       type: "toggle",
       name: "enableSubscription",
       message: "Enable subscriptions?",
-      initial: false,
+      initial: defaultConfigs.enableSubscription ?? false,
       enabled: "Yep",
       disabled: "Nope",
     },
@@ -140,57 +200,65 @@ const bootstrap = async () => {
       type: "toggle",
       name: "enableSubfieldArgs",
       message: "Enable arguments of sub-fields?",
-      initial: false,
+      initial: defaultConfigs.enableSubfieldArgs ?? false,
       enabled: "Yep",
       disabled: "Nope",
     },
     {
       type: "toggle",
-      name: "enableFragments",
+      name: "disableFragments",
       message: "Disable fragment types?",
-      initial: false,
+      initial: defaultConfigs.disableFragments ?? false,
       enabled: "Yep",
       disabled: "Nope",
     },
     {
       type: "input",
-      name: "outputPath",
-      message: "Where should we generate the file to?",
-      initial: basePath,
+      name: "disableArgSuffixes",
+      message: "Hide argument suffix types?",
+      initial: defaultConfigs.disableArgSuffixes
+        ? defaultConfigs.disableArgSuffixes.join(",")
+        : "",
+      validate(value: string): string | boolean {
+        if (value && !PATTERN_NAMES_WITH_COMMA.test(value)) {
+          return "disableArgSuffixes is invalid format";
+        }
+        return true;
+      },
     },
     {
       type: "input",
-      name: "outputFile",
+      name: "outputPath",
+      message: "Where should we generate the file to?",
+      initial: defaultConfigs.outputPath ?? ".",
+    },
+    {
+      type: "toggle",
+      name: "separateFiles",
+      message: "Separate different graphql files for each model?",
+      initial: defaultConfigs.separateFiles ?? true,
+      enabled: "Yep",
+      disabled: "Nope",
+    },
+    {
+      type: "input",
+      name: "outputFilePrefix",
       message:
-        "What name of the file should we generate to? (default: <model_name>.graphql)",
+        "What prefix of the file should we generate to?",
       initial: "",
     },
   ].filter((t) => t);
 
-  type QuestionResult = {
-    url: string;
-    adminSecret: string;
-    role: string;
-    tables: string;
-    maxDepth: number;
-    enableSubfieldArgs: boolean;
-    disableFragments: boolean;
-    outputPath: string;
-    outputFile: string;
-    enableQuery: boolean;
-    enableMutation: boolean;
-    enableSubscription: boolean;
-  };
-
   const generate = async (options: QuestionResult) => {
-    url = options.url || url;
-    const adminSecret = options.adminSecret || headers["x-hasura-admin-secret"];
-    const role = options.role || headers["x-hasura-role"];
+    const url = options.url || defaultConfigs.url;
+    const adminSecret = options.adminSecret || defaultConfigs.adminSecret;
+    const role = options.role || defaultConfigs.role;
 
     const schema = await loadSchema(url, {
       loaders: [new UrlLoader()],
       headers: {
         Accept: "application/json",
+        ...defaultConfigs.headers,
         ...(role
           ? {
               "x-hasura-role": role,
@@ -202,43 +270,56 @@ const bootstrap = async () => {
             }
           : null),
       },
-      method,
+      method: defaultConfigs.method ?? "POST",
     });
 
-    const tables = options.tables.split(",").map((s) => s.trim());
-    const outputFileName = options.outputFile || `${tables.join("_")}.graphql`;
-    const outputFilePath = path.resolve(options.outputPath, outputFileName);
-    const disableOperationTypes = [
-      options.enableQuery ? null : "query",
-      options.enableMutation ? null : "mutation",
-      options.enableSubscription ? null : "subscription",
-    ].filter((s) => s);
-    const config: Types.GenerateOptions = {
-      documents: [],
-      config: {},
-      // used by a plugin internally, although the 'typescript' plugin currently
-      // returns the string output, rather than writing to a file
-      filename: outputFilePath,
-      schema: parse(printSchema(schema)),
-      plugins: [
-        // Each plugin should be an object
-        {
-          "graphql-codegen-hasura-graphql": {
-            tables,
-            disableOperationTypes,
-            maxDepth: options.maxDepth,
-            enableSubfieldArgs: options.enableSubfieldArgs,
-            disableFragments: options.disableFragments,
-          }, // Here you can pass configuration to the plugin
+    const genGraphQL = async (models: string[]) => {
+      const outputFileName =`${options.outputFilePrefix}${models.join("_")}.graphql`;
+      const outputFilePath = path.resolve(options.outputPath, outputFileName);
+      const disableOperationTypes = [
+        options.enableQuery ? null : "query",
+        options.enableMutation ? null : "mutation",
+        options.enableSubscription ? null : "subscription",
+      ].filter((s) => s);
+      const config: Types.GenerateOptions = {
+        documents: [],
+        config: {},
+        // used by a plugin internally, although the 'typescript' plugin currently
+        // returns the string output, rather than writing to a file
+        filename: outputFilePath,
+        schema: parse(printSchema(schema)),
+        plugins: [
+          // Each plugin should be an object
+          {
+            "graphql-codegen-hasura-graphql": {
+              tables: models,
+              disableOperationTypes,
+              maxDepth: options.maxDepth,
+              enableSubfieldArgs: options.enableSubfieldArgs,
+              disableFragments: options.disableFragments,
+              disableArgSuffixes: parseArrayString(options.disableArgSuffixes),
+            }, // Here you can pass configuration to the plugin
+          },
+        ],
+        pluginMap: {
+          "graphql-codegen-hasura-graphql": hasuraPlugin,
         },
-      ],
-      pluginMap: {
-        "graphql-codegen-hasura-graphql": hasuraPlugin,
-      },
+      };
+
+      const output = await codegen(config);
+      if (options.outputPath) {
+        mkdirSync(options.outputPath, { recursive: true });
+      }
+      writeFileSync(outputFilePath, output, "utf8");
     };
 
-    const output = await codegen(config);
-    writeFileSync(outputFilePath, output, "utf8");
+    const models = parseArrayString(options.models);
+    if (!options.separateFiles) {
+      await genGraphQL(models);
+    } else {
+      await Promise.all(models.map((model) => genGraphQL([model])));
+    }
+
     console.log("Outputs generated!");
   };
 
@@ -247,6 +328,13 @@ const bootstrap = async () => {
     .catch((err) => {
       console.error(err);
     });
+};
+
+const parseArrayString = (input: string): string[] => {
+  if (!input) {
+    return [];
+  }
+  return input.split(",").map((s) => s.trim());
 };
 
 bootstrap();
