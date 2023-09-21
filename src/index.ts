@@ -19,16 +19,17 @@ type QuestionResult = {
   url: string;
   adminSecret: string;
   role: string;
-  tables: string;
+  models: string;
   maxDepth: number;
   enableSubfieldArgs: boolean;
   disableFragments: boolean;
   disableArgSuffixes: string;
   outputPath: string;
-  outputFile: string;
+  outputFilePrefix: string;
   enableQuery: boolean;
   enableMutation: boolean;
   enableSubscription: boolean;
+  separateFiles: boolean;
 };
 
 type DefaultOptions = Omit<QuestionResult, "disableArgSuffixes"> & {
@@ -41,10 +42,11 @@ const PATTERN_NAMES_WITH_COMMA = /\w+(,\w+)?/;
 
 const bootstrap = async () => {
   const argv = await yargs(hideBin(process.argv)).argv;
+
   const envOutput = dotenvConfig();
 
   if (envOutput.error) {
-    console.warn(envOutput.error);
+    console.warn(envOutput.error.message);
   }
 
   let codegenConfigFile =
@@ -137,11 +139,11 @@ const bootstrap = async () => {
       : null,
     {
       type: "input",
-      name: "tables",
+      name: "models",
       message: "What models do you need to generate? (separated by comma)",
       validate(value: string): string | boolean {
         if (!value || !PATTERN_NAMES_WITH_COMMA.test(value)) {
-          return "tables value is empty or invalid format";
+          return "models value is empty or invalid format";
         }
         return true;
       },
@@ -231,10 +233,18 @@ const bootstrap = async () => {
       initial: defaultConfigs.outputPath ?? ".",
     },
     {
+      type: "toggle",
+      name: "separateFiles",
+      message: "Separate different graphql files for each model?",
+      initial: defaultConfigs.separateFiles ?? true,
+      enabled: "Yep",
+      disabled: "Nope",
+    },
+    {
       type: "input",
-      name: "outputFile",
+      name: "outputFilePrefix",
       message:
-        "What name of the file should we generate to? (default: <model_name>.graphql)",
+        "What prefix of the file should we generate to?",
       initial: "",
     },
   ].filter((t) => t);
@@ -263,44 +273,53 @@ const bootstrap = async () => {
       method: defaultConfigs.method ?? "POST",
     });
 
-    const tables = parseArrayString(options.tables);
-    const outputFileName = options.outputFile || `${tables.join("_")}.graphql`;
-    const outputFilePath = path.resolve(options.outputPath, outputFileName);
-    const disableOperationTypes = [
-      options.enableQuery ? null : "query",
-      options.enableMutation ? null : "mutation",
-      options.enableSubscription ? null : "subscription",
-    ].filter((s) => s);
-    const config: Types.GenerateOptions = {
-      documents: [],
-      config: {},
-      // used by a plugin internally, although the 'typescript' plugin currently
-      // returns the string output, rather than writing to a file
-      filename: outputFilePath,
-      schema: parse(printSchema(schema)),
-      plugins: [
-        // Each plugin should be an object
-        {
-          "graphql-codegen-hasura-graphql": {
-            tables,
-            disableOperationTypes,
-            maxDepth: options.maxDepth,
-            enableSubfieldArgs: options.enableSubfieldArgs,
-            disableFragments: options.disableFragments,
-            disableArgSuffixes: parseArrayString(options.disableArgSuffixes),
-          }, // Here you can pass configuration to the plugin
+    const genGraphQL = async (models: string[]) => {
+      const outputFileName =`${options.outputFilePrefix}${models.join("_")}.graphql`;
+      const outputFilePath = path.resolve(options.outputPath, outputFileName);
+      const disableOperationTypes = [
+        options.enableQuery ? null : "query",
+        options.enableMutation ? null : "mutation",
+        options.enableSubscription ? null : "subscription",
+      ].filter((s) => s);
+      const config: Types.GenerateOptions = {
+        documents: [],
+        config: {},
+        // used by a plugin internally, although the 'typescript' plugin currently
+        // returns the string output, rather than writing to a file
+        filename: outputFilePath,
+        schema: parse(printSchema(schema)),
+        plugins: [
+          // Each plugin should be an object
+          {
+            "graphql-codegen-hasura-graphql": {
+              tables: models,
+              disableOperationTypes,
+              maxDepth: options.maxDepth,
+              enableSubfieldArgs: options.enableSubfieldArgs,
+              disableFragments: options.disableFragments,
+              disableArgSuffixes: parseArrayString(options.disableArgSuffixes),
+            }, // Here you can pass configuration to the plugin
+          },
+        ],
+        pluginMap: {
+          "graphql-codegen-hasura-graphql": hasuraPlugin,
         },
-      ],
-      pluginMap: {
-        "graphql-codegen-hasura-graphql": hasuraPlugin,
-      },
+      };
+
+      const output = await codegen(config);
+      if (options.outputPath) {
+        mkdirSync(options.outputPath, { recursive: true });
+      }
+      writeFileSync(outputFilePath, output, "utf8");
     };
 
-    const output = await codegen(config);
-    if (options.outputPath) {
-      mkdirSync(options.outputPath, { recursive: true });
+    const models = parseArrayString(options.models);
+    if (!options.separateFiles) {
+      await genGraphQL(models);
+    } else {
+      await Promise.all(models.map((model) => genGraphQL([model])));
     }
-    writeFileSync(outputFilePath, output, "utf8");
+
     console.log("Outputs generated!");
   };
 
