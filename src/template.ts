@@ -28,8 +28,8 @@ const renderTemplate = async (
 ): Promise<unknown> => {
   const options = {
     ...defaultConfigs,
-    ...config,
     ...(await configResolver.resolve(process.cwd())),
+    ...config,
   };
 
   return execute(await render(args, options), args, options)

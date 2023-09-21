@@ -17,6 +17,12 @@ import yargs from "yargs/yargs";
 import { hideBin } from "yargs/helpers";
 import renderTemplate from "./template";
 
+type Action = "graphql" | "template" | "all";
+
+const parseActions = (action: Action): Action[] => {
+  return action === "all" ? ["graphql", "template"] : [action];
+};
+
 type QuestionResult = {
   url: string;
   adminSecret: string;
@@ -32,18 +38,158 @@ type QuestionResult = {
   enableMutation: boolean;
   enableSubscription: boolean;
   separateFiles: boolean;
-  renderTemplate: boolean;
   templatePath: string;
   disableFields: string[];
 };
 
 type DefaultOptions = QuestionResult & {
-  headers: Record<string, string>;
-  method: string;
-  silent: boolean;
+  headers?: Record<string, string>;
+  method?: string;
+  silent?: boolean;
 };
 
 const PATTERN_NAMES_WITH_COMMA = /\w+(,\w+)?/;
+
+const actionQuestions = [
+  {
+    type: "select",
+    name: "action",
+    message: "Please choose action",
+    initial: "graphql",
+    choices: [
+      { name: "graphql", message: "Generate GraphQL", value: "graphql" },
+      { name: "template", message: "Generate Template", value: "template" },
+      { name: "all", message: "All", value: "all" },
+    ],
+  },
+];
+
+const generate = async (actions: Action[], options: DefaultOptions) => {
+  console.log("rendering files...");
+
+  const url = options.url;
+  const adminSecret = options.adminSecret;
+  const role = options.role;
+
+  const schema = await loadSchema(url, {
+    loaders: [new UrlLoader()],
+    headers: {
+      Accept: "application/json",
+      ...options.headers,
+      ...(role
+        ? {
+            "x-hasura-role": role,
+          }
+        : null),
+      ...(adminSecret
+        ? {
+            "x-hasura-admin-secret": adminSecret,
+          }
+        : null),
+    },
+    method: options.method ?? "POST",
+  });
+
+  const genGraphQL = async (models: string[]) => {
+    const outputFileName = `${options.outputFilePrefix}${models.join(
+      "_"
+    )}.graphql`;
+    const outputFilePath = path.resolve(options.outputPath, outputFileName);
+    const disableOperationTypes = [
+      options.enableQuery ? null : "query",
+      options.enableMutation ? null : "mutation",
+      options.enableSubscription ? null : "subscription",
+    ].filter((s) => s);
+    const config: Types.GenerateOptions = {
+      documents: [],
+      config: {},
+      // used by a plugin internally, although the 'typescript' plugin currently
+      // returns the string output, rather than writing to a file
+      filename: outputFilePath,
+      schema: parse(printSchema(schema)),
+      plugins: [
+        {
+          "graphql-codegen-hasura-graphql": {
+            tables: models,
+            disableOperationTypes,
+            maxDepth: options.maxDepth,
+            enableSubfieldArgs: options.enableSubfieldArgs,
+            disableFragments: options.disableFragments,
+            disableArgSuffixes: options.disableArgSuffixes,
+          },
+        },
+      ],
+      pluginMap: {
+        "graphql-codegen-hasura-graphql": hasuraPlugin,
+      },
+    };
+
+    const output = await codegen(config);
+    if (options.outputPath) {
+      mkdirSync(options.outputPath, { recursive: true });
+    }
+    writeFileSync(outputFilePath, output, "utf8");
+  };
+
+  const models = options.models;
+  if (actions.includes("graphql")) {
+    if (!options.separateFiles) {
+      await genGraphQL(models);
+    } else {
+      await Promise.all(models.map((model) => genGraphQL([model])));
+    }
+  }
+
+  if (actions.includes("template")) {
+    const config: Types.GenerateOptions = {
+      documents: [],
+      config: {},
+      // used by a plugin internally, although the 'typescript' plugin currently
+      // returns the string output, rather than writing to a file
+      filename: "temp.json",
+      schema: parse(printSchema(schema)),
+      plugins: [
+        {
+          "graphql-codegen-hasura-schemas": {
+            models,
+            disableFields: options.disableFields,
+          },
+        },
+      ],
+      pluginMap: {
+        "graphql-codegen-hasura-schemas": hasuraSchemaPlugin,
+      },
+    };
+
+    const output = await codegen(config);
+    const modelSchemas: hasuraSchemaPlugin.ModelSchemas = JSON.parse(output);
+
+    // try to load extra prompt
+    const promptTemplatePath = path.resolve(options.templatePath, "prompt.js");
+    let templateArguments = {};
+    if (existsSync(promptTemplatePath)) {
+      const templatePromptOptions = await import(promptTemplatePath);
+
+      templateArguments = await prompt(templatePromptOptions.default);
+    }
+
+    await Promise.all(
+      Object.keys(modelSchemas).map((modelName) =>
+        renderTemplate(
+          {
+            actionfolder: options.templatePath,
+            modelName,
+            ...modelSchemas[modelName],
+            ...templateArguments,
+          },
+          {}
+        )
+      )
+    );
+  }
+
+  console.log("Outputs generated!");
+};
 
 const bootstrap = async () => {
   const argv = await yargs(hideBin(process.argv)).argv;
@@ -109,7 +255,7 @@ const bootstrap = async () => {
     }
   }
 
-  const questions: any[] = [
+  const sharedQuestions: any[] = [
     !defaultConfigs.url
       ? {
           type: "input",
@@ -150,6 +296,9 @@ const bootstrap = async () => {
         return true;
       },
     },
+  ];
+
+  const graphqlQuestions: any[] = [
     defaultConfigs.silent && defaultConfigs.maxDepth
       ? null
       : {
@@ -245,14 +394,12 @@ const bootstrap = async () => {
             return true;
           },
         },
-    defaultConfigs.silent && defaultConfigs.outputPath !== undefined
-      ? null
-      : {
-          type: "input",
-          name: "outputPath",
-          message: "Where should we generate the file to?",
-          initial: defaultConfigs.outputPath ?? ".",
-        },
+    {
+      type: "input",
+      name: "outputPath",
+      message: "What folder should we generate graphql files to?",
+      initial: defaultConfigs.outputPath ?? ".",
+    },
     defaultConfigs.silent && defaultConfigs.separateFiles !== undefined
       ? null
       : {
@@ -271,19 +418,9 @@ const bootstrap = async () => {
           message: "What prefix of graphql files should we generate to?",
           initial: defaultConfigs.outputFilePrefix ?? "",
         },
-    {
-      type: "toggle",
-      name: "renderTemplate",
-      message: "Continue to generate template?",
-      initial: defaultConfigs.renderTemplate ?? false,
-      skip:
-        defaultConfigs.silent && defaultConfigs.renderTemplate !== undefined,
-      enabled: "Yep",
-      disabled: "Nope",
-    },
   ].filter((m) => m);
 
-  const templatePromptOptions: any[] = [
+  const templateQuestions: any[] = [
     defaultConfigs.silent && defaultConfigs.disableFields !== undefined
       ? null
       : {
@@ -315,152 +452,27 @@ const bootstrap = async () => {
         },
   ].filter((s) => s);
 
-  const generate = async (options: QuestionResult) => {
-    console.log("rendering files...");
+  const actionAnswer = await prompt<{ action: Action }>(actionQuestions);
+  const actions = parseActions(actionAnswer.action);
 
-    const url = options.url || defaultConfigs.url;
-    const adminSecret = options.adminSecret || defaultConfigs.adminSecret;
-    const role = options.role || defaultConfigs.role;
-
-    const schema = await loadSchema(url, {
-      loaders: [new UrlLoader()],
-      headers: {
-        Accept: "application/json",
-        ...defaultConfigs.headers,
-        ...(role
-          ? {
-              "x-hasura-role": role,
-            }
-          : null),
-        ...(adminSecret
-          ? {
-              "x-hasura-admin-secret": adminSecret,
-            }
-          : null),
-      },
-      method: defaultConfigs.method ?? "POST",
-    });
-
-    const genGraphQL = async (models: string[]) => {
-      const outputFileName = `${options.outputFilePrefix}${models.join(
-        "_"
-      )}.graphql`;
-      const outputFilePath = path.resolve(options.outputPath, outputFileName);
-      const disableOperationTypes = [
-        options.enableQuery ? null : "query",
-        options.enableMutation ? null : "mutation",
-        options.enableSubscription ? null : "subscription",
-      ].filter((s) => s);
-      const config: Types.GenerateOptions = {
-        documents: [],
-        config: {},
-        // used by a plugin internally, although the 'typescript' plugin currently
-        // returns the string output, rather than writing to a file
-        filename: outputFilePath,
-        schema: parse(printSchema(schema)),
-        plugins: [
-          {
-            "graphql-codegen-hasura-graphql": {
-              tables: models,
-              disableOperationTypes,
-              maxDepth: options.maxDepth,
-              enableSubfieldArgs: options.enableSubfieldArgs,
-              disableFragments: options.disableFragments,
-              disableArgSuffixes: options.disableArgSuffixes,
-            },
-          },
-        ],
-        pluginMap: {
-          "graphql-codegen-hasura-graphql": hasuraPlugin,
-        },
-      };
-
-      const output = await codegen(config);
-      if (options.outputPath) {
-        mkdirSync(options.outputPath, { recursive: true });
-      }
-      writeFileSync(outputFilePath, output, "utf8");
-    };
-
-    const models = options.models;
-    if (!options.separateFiles) {
-      await genGraphQL(models);
-    } else {
-      await Promise.all(models.map((model) => genGraphQL([model])));
+  const questions = (() => {
+    switch (actionAnswer.action) {
+      case "graphql":
+        return [...sharedQuestions, ...graphqlQuestions];
+      case "template":
+        return [...sharedQuestions, ...templateQuestions];
+      case "all":
+      default:
+        return [...sharedQuestions, ...graphqlQuestions, ...templateQuestions];
     }
+  })();
 
-    if (options.renderTemplate) {
-      const config: Types.GenerateOptions = {
-        documents: [],
-        config: {},
-        // used by a plugin internally, although the 'typescript' plugin currently
-        // returns the string output, rather than writing to a file
-        filename: "temp.json",
-        schema: parse(printSchema(schema)),
-        plugins: [
-          {
-            "graphql-codegen-hasura-schemas": {
-              models,
-              disableFields: options.disableFields,
-            },
-          },
-        ],
-        pluginMap: {
-          "graphql-codegen-hasura-schemas": hasuraSchemaPlugin,
-        },
-      };
-
-      const output = await codegen(config);
-      const modelSchemas: hasuraSchemaPlugin.ModelSchemas = JSON.parse(output);
-
-      // try to load extra prompt
-      const promptTemplatePath = path.resolve(
-        options.templatePath,
-        "prompt.js"
-      );
-      let templateArguments = {};
-      if (existsSync(promptTemplatePath)) {
-        const templatePromptOptions = await import(promptTemplatePath);
-
-        templateArguments = await prompt(templatePromptOptions.default);
-      }
-
-      await Promise.all(
-        Object.keys(modelSchemas).map((modelName) =>
-          renderTemplate(
-            {
-              actionfolder: options.templatePath,
-              modelName,
-              hasuraModel: modelSchemas[modelName],
-              ...templateArguments,
-            },
-            {}
-          )
-        )
-      );
-    }
-
-    console.log("Outputs generated!");
-  };
-
-  prompt<QuestionResult>(questions)
-    .then((answer) =>
-      answer.renderTemplate && templatePromptOptions.length
-        ? prompt(templatePromptOptions).then((templateAnswer) => ({
-            ...answer,
-            ...templateAnswer,
-          }))
-        : answer
-    )
-    .then((result) =>
-      generate({
-        ...defaultConfigs,
-        ...result,
-      })
-    )
-    .catch((err) => {
-      console.error(err);
-    });
+  return prompt<QuestionResult>(questions).then((finalAnswer) =>
+    generate(actions, {
+      ...defaultConfigs,
+      ...finalAnswer,
+    })
+  );
 };
 
 const parseArrayString = (input: string): string[] => {
