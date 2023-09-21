@@ -4,6 +4,7 @@ import { readFileSync, writeFileSync, existsSync, mkdirSync } from "fs";
 import path from "path";
 import { printSchema, parse } from "graphql";
 import * as hasuraPlugin from "graphql-codegen-hasura-operations";
+import * as hasuraSchemaPlugin from "graphql-codegen-hasura-schemas";
 import { loadSchema } from "@graphql-tools/load";
 import { UrlLoader } from "@graphql-tools/url-loader";
 import { codegen } from "@graphql-codegen/core";
@@ -14,28 +15,32 @@ import { env } from "string-env-interpolation";
 import { prompt } from "enquirer";
 import yargs from "yargs/yargs";
 import { hideBin } from "yargs/helpers";
+import renderTemplate from "./template";
 
 type QuestionResult = {
   url: string;
   adminSecret: string;
   role: string;
-  models: string;
+  models: string[];
   maxDepth: number;
   enableSubfieldArgs: boolean;
   disableFragments: boolean;
-  disableArgSuffixes: string;
+  disableArgSuffixes: string[];
   outputPath: string;
   outputFilePrefix: string;
   enableQuery: boolean;
   enableMutation: boolean;
   enableSubscription: boolean;
   separateFiles: boolean;
+  renderTemplate: boolean;
+  templatePath: string;
+  disableFields: string[];
 };
 
-type DefaultOptions = Omit<QuestionResult, "disableArgSuffixes"> & {
+type DefaultOptions = QuestionResult & {
   headers: Record<string, string>;
   method: string;
-  disableArgSuffixes: string[];
+  silent: boolean;
 };
 
 const PATTERN_NAMES_WITH_COMMA = /\w+(,\w+)?/;
@@ -44,10 +49,6 @@ const bootstrap = async () => {
   const argv = await yargs(hideBin(process.argv)).argv;
 
   const envOutput = dotenvConfig();
-
-  if (envOutput.error) {
-    console.warn(envOutput.error.message);
-  }
 
   let codegenConfigFile =
     process.env.CONFIG_PATH || (argv.config as string) || "codegen.yml";
@@ -108,7 +109,7 @@ const bootstrap = async () => {
     }
   }
 
-  const questions = [
+  const questions: any[] = [
     !defaultConfigs.url
       ? {
           type: "input",
@@ -141,115 +142,182 @@ const bootstrap = async () => {
       type: "input",
       name: "models",
       message: "What models do you need to generate? (separated by comma)",
+      result: parseArrayString,
       validate(value: string): string | boolean {
         if (!value || !PATTERN_NAMES_WITH_COMMA.test(value)) {
-          return "models value is empty or invalid format";
+          return "models value is empty or in invalid format";
         }
         return true;
       },
     },
-    {
-      type: "numeral",
-      name: "maxDepth",
-      message: "What is the max depth of output sub-fields?",
-      initial: defaultConfigs.maxDepth ?? 1,
-      validate(value: unknown) {
-        const message = "maxDepth must be larger than 0";
-        try {
-          if (!value) {
-            return message;
-          }
+    defaultConfigs.silent && defaultConfigs.maxDepth
+      ? null
+      : {
+          type: "numeral",
+          name: "maxDepth",
+          message: "What is the max depth of output sub-fields?",
+          initial: defaultConfigs.maxDepth ?? 1,
+          validate(value: unknown) {
+            const message = "maxDepth must be larger than 0";
+            try {
+              if (!value) {
+                return message;
+              }
 
-          const numberValue =
-            typeof value === "number" ? value : parseInt(value as string, 10);
-          if (numberValue <= 0) {
-            return message;
-          }
+              const numberValue =
+                typeof value === "number"
+                  ? value
+                  : parseInt(value as string, 10);
+              if (numberValue <= 0) {
+                return message;
+              }
 
-          return true;
-        } catch {
-          return message;
-        }
-      },
-    },
+              return true;
+            } catch {
+              return message;
+            }
+          },
+        },
+    defaultConfigs.silent && defaultConfigs.enableQuery !== undefined
+      ? null
+      : {
+          type: "toggle",
+          name: "enableQuery",
+          message: "Enable queries?",
+          initial: defaultConfigs.enableQuery ?? true,
+          enabled: "Yep",
+          disabled: "Nope",
+        },
+    defaultConfigs.silent && defaultConfigs.enableMutation !== undefined
+      ? null
+      : {
+          type: "toggle",
+          name: "enableMutation",
+          message: "Enable mutations?",
+          initial: defaultConfigs.enableMutation ?? true,
+          enabled: "Yep",
+          disabled: "Nope",
+        },
+    defaultConfigs.silent && defaultConfigs.enableSubscription !== undefined
+      ? null
+      : {
+          type: "toggle",
+          name: "enableSubscription",
+          message: "Enable subscriptions?",
+          initial: defaultConfigs.enableSubscription ?? false,
+          enabled: "Yep",
+          disabled: "Nope",
+        },
+    defaultConfigs.silent && defaultConfigs.enableSubfieldArgs !== undefined
+      ? null
+      : {
+          type: "toggle",
+          name: "enableSubfieldArgs",
+          message: "Enable arguments of sub-fields?",
+          initial: defaultConfigs.enableSubfieldArgs ?? false,
+          enabled: "Yep",
+          disabled: "Nope",
+        },
+    defaultConfigs.silent && defaultConfigs.disableFragments !== undefined
+      ? null
+      : {
+          type: "toggle",
+          name: "disableFragments",
+          message: "Disable fragment types?",
+          initial: defaultConfigs.disableFragments ?? false,
+          enabled: "Yep",
+          disabled: "Nope",
+        },
+    defaultConfigs.silent && defaultConfigs.disableArgSuffixes !== undefined
+      ? null
+      : {
+          type: "input",
+          name: "disableArgSuffixes",
+          message: "Hide argument suffix types?",
+          initial: defaultConfigs.disableArgSuffixes
+            ? defaultConfigs.disableArgSuffixes.join(",")
+            : "",
+          result: parseArrayString,
+          validate(value: string): string | boolean {
+            if (value && !PATTERN_NAMES_WITH_COMMA.test(value)) {
+              return "disableArgSuffixes format is invalid";
+            }
+            return true;
+          },
+        },
+    defaultConfigs.silent && defaultConfigs.outputPath !== undefined
+      ? null
+      : {
+          type: "input",
+          name: "outputPath",
+          message: "Where should we generate the file to?",
+          initial: defaultConfigs.outputPath ?? ".",
+        },
+    defaultConfigs.silent && defaultConfigs.separateFiles !== undefined
+      ? null
+      : {
+          type: "toggle",
+          name: "separateFiles",
+          message: "Separate different graphql files for each model?",
+          initial: defaultConfigs.separateFiles ?? true,
+          enabled: "Yep",
+          disabled: "Nope",
+        },
+    defaultConfigs.silent && defaultConfigs.outputFilePrefix !== undefined
+      ? null
+      : {
+          type: "input",
+          name: "outputFilePrefix",
+          message: "What prefix of graphql files should we generate to?",
+          initial: defaultConfigs.outputFilePrefix ?? "",
+        },
     {
       type: "toggle",
-      name: "enableQuery",
-      message: "Enable queries?",
-      initial: defaultConfigs.enableQuery ?? true,
+      name: "renderTemplate",
+      message: "Continue to generate template?",
+      initial: defaultConfigs.renderTemplate ?? false,
+      skip:
+        defaultConfigs.silent && defaultConfigs.renderTemplate !== undefined,
       enabled: "Yep",
       disabled: "Nope",
     },
-    {
-      type: "toggle",
-      name: "enableMutation",
-      message: "Enable mutations?",
-      initial: defaultConfigs.enableMutation ?? true,
-      enabled: "Yep",
-      disabled: "Nope",
-    },
-    {
-      type: "toggle",
-      name: "enableSubscription",
-      message: "Enable subscriptions?",
-      initial: defaultConfigs.enableSubscription ?? false,
-      enabled: "Yep",
-      disabled: "Nope",
-    },
-    {
-      type: "toggle",
-      name: "enableSubfieldArgs",
-      message: "Enable arguments of sub-fields?",
-      initial: defaultConfigs.enableSubfieldArgs ?? false,
-      enabled: "Yep",
-      disabled: "Nope",
-    },
-    {
-      type: "toggle",
-      name: "disableFragments",
-      message: "Disable fragment types?",
-      initial: defaultConfigs.disableFragments ?? false,
-      enabled: "Yep",
-      disabled: "Nope",
-    },
-    {
-      type: "input",
-      name: "disableArgSuffixes",
-      message: "Hide argument suffix types?",
-      initial: defaultConfigs.disableArgSuffixes
-        ? defaultConfigs.disableArgSuffixes.join(",")
-        : "",
-      validate(value: string): string | boolean {
-        if (value && !PATTERN_NAMES_WITH_COMMA.test(value)) {
-          return "disableArgSuffixes is invalid format";
-        }
-        return true;
-      },
-    },
-    {
-      type: "input",
-      name: "outputPath",
-      message: "Where should we generate the file to?",
-      initial: defaultConfigs.outputPath ?? ".",
-    },
-    {
-      type: "toggle",
-      name: "separateFiles",
-      message: "Separate different graphql files for each model?",
-      initial: defaultConfigs.separateFiles ?? true,
-      enabled: "Yep",
-      disabled: "Nope",
-    },
-    {
-      type: "input",
-      name: "outputFilePrefix",
-      message:
-        "What prefix of the file should we generate to?",
-      initial: "",
-    },
-  ].filter((t) => t);
+  ].filter((m) => m);
+
+  const templatePromptOptions: any[] = [
+    defaultConfigs.silent && defaultConfigs.disableFields !== undefined
+      ? null
+      : {
+          type: "input",
+          name: "disableFields",
+          message: "What fields should we exclude from models?",
+          initial: defaultConfigs.disableFields?.join(",") ?? "",
+          result: parseArrayString,
+          validate(value: string): string | boolean {
+            if (value && !PATTERN_NAMES_WITH_COMMA.test(value)) {
+              return "disableFields format is invalid";
+            }
+            return true;
+          },
+        },
+    defaultConfigs.silent && defaultConfigs.templatePath !== undefined
+      ? null
+      : {
+          type: "input",
+          name: "templatePath",
+          message: "What template path should we render?",
+          initial: defaultConfigs.templatePath ?? "_templates/hello",
+          validate(value: string): string | boolean {
+            if (!value || !existsSync(value)) {
+              return "template path does not exist";
+            }
+            return true;
+          },
+        },
+  ].filter((s) => s);
 
   const generate = async (options: QuestionResult) => {
+    console.log("rendering files...");
+
     const url = options.url || defaultConfigs.url;
     const adminSecret = options.adminSecret || defaultConfigs.adminSecret;
     const role = options.role || defaultConfigs.role;
@@ -274,7 +342,9 @@ const bootstrap = async () => {
     });
 
     const genGraphQL = async (models: string[]) => {
-      const outputFileName =`${options.outputFilePrefix}${models.join("_")}.graphql`;
+      const outputFileName = `${options.outputFilePrefix}${models.join(
+        "_"
+      )}.graphql`;
       const outputFilePath = path.resolve(options.outputPath, outputFileName);
       const disableOperationTypes = [
         options.enableQuery ? null : "query",
@@ -289,7 +359,6 @@ const bootstrap = async () => {
         filename: outputFilePath,
         schema: parse(printSchema(schema)),
         plugins: [
-          // Each plugin should be an object
           {
             "graphql-codegen-hasura-graphql": {
               tables: models,
@@ -297,8 +366,8 @@ const bootstrap = async () => {
               maxDepth: options.maxDepth,
               enableSubfieldArgs: options.enableSubfieldArgs,
               disableFragments: options.disableFragments,
-              disableArgSuffixes: parseArrayString(options.disableArgSuffixes),
-            }, // Here you can pass configuration to the plugin
+              disableArgSuffixes: options.disableArgSuffixes,
+            },
           },
         ],
         pluginMap: {
@@ -313,18 +382,82 @@ const bootstrap = async () => {
       writeFileSync(outputFilePath, output, "utf8");
     };
 
-    const models = parseArrayString(options.models);
+    const models = options.models;
     if (!options.separateFiles) {
       await genGraphQL(models);
     } else {
       await Promise.all(models.map((model) => genGraphQL([model])));
     }
 
+    if (options.renderTemplate) {
+      const config: Types.GenerateOptions = {
+        documents: [],
+        config: {},
+        // used by a plugin internally, although the 'typescript' plugin currently
+        // returns the string output, rather than writing to a file
+        filename: "temp.json",
+        schema: parse(printSchema(schema)),
+        plugins: [
+          {
+            "graphql-codegen-hasura-schemas": {
+              models,
+              disableFields: options.disableFields,
+            },
+          },
+        ],
+        pluginMap: {
+          "graphql-codegen-hasura-schemas": hasuraSchemaPlugin,
+        },
+      };
+
+      const output = await codegen(config);
+      const modelSchemas: hasuraSchemaPlugin.ModelSchemas = JSON.parse(output);
+
+      // try to load extra prompt
+      const promptTemplatePath = path.resolve(
+        options.templatePath,
+        "prompt.js"
+      );
+      let templateArguments = {};
+      if (existsSync(promptTemplatePath)) {
+        const templatePromptOptions = await import(promptTemplatePath);
+
+        templateArguments = await prompt(templatePromptOptions.default);
+      }
+
+      await Promise.all(
+        Object.keys(modelSchemas).map((modelName) =>
+          renderTemplate(
+            {
+              actionfolder: options.templatePath,
+              modelName,
+              hasuraModel: modelSchemas[modelName],
+              ...templateArguments,
+            },
+            {}
+          )
+        )
+      );
+    }
+
     console.log("Outputs generated!");
   };
 
   prompt<QuestionResult>(questions)
-    .then((result) => generate(result))
+    .then((answer) =>
+      answer.renderTemplate && templatePromptOptions.length
+        ? prompt(templatePromptOptions).then((templateAnswer) => ({
+            ...answer,
+            ...templateAnswer,
+          }))
+        : answer
+    )
+    .then((result) =>
+      generate({
+        ...defaultConfigs,
+        ...result,
+      })
+    )
     .catch((err) => {
       console.error(err);
     });
@@ -334,7 +467,11 @@ const parseArrayString = (input: string): string[] => {
   if (!input) {
     return [];
   }
-  return input.split(",").map((s) => s.trim());
+  return input
+    .trim()
+    .split(",")
+    .map((s) => s.trim())
+    .filter((s) => s);
 };
 
 bootstrap();
