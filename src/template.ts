@@ -1,3 +1,7 @@
+/* eslint-disable @typescript-eslint/no-unsafe-call */
+/* eslint-disable @typescript-eslint/no-unsafe-member-access */
+/* eslint-disable @typescript-eslint/no-unsafe-return */
+/* eslint-disable @typescript-eslint/no-unsafe-assignment */
 import render from "hygen/dist/render";
 import execute from "hygen/dist/execute";
 import type { RunnerConfig } from "hygen/dist/types";
@@ -8,7 +12,7 @@ import { ConfigResolver } from 'hygen/dist/config'
 const configResolver = new ConfigResolver('.hygen.js', {
   exists: fs.exists,
   load: async (f) => await import(f),
-  none: (_) => ({}),
+  none: () => ({}),
 });
 
 const defaultConfigs: RunnerConfig = {
@@ -23,6 +27,7 @@ const defaultConfigs: RunnerConfig = {
 }
 
 const renderTemplate = async (
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   args: any,
   config: RunnerConfig,
 ): Promise<unknown> => {
