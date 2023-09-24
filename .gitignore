@@ -15,4 +15,5 @@ yarn-error.log*
 *.graphql
 
 /_templates
+/output
 /.hygen.js

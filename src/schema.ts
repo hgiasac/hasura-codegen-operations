@@ -33,8 +33,12 @@ export type ModelSchemas = {
 };
 
 type BuildModelSchemaOptions = {
-  disableFields?: string[];
-  primaryKeyNames?: string[];
+  disableFields: string[] | undefined;
+  disableFieldPrefixes: string[] | undefined;
+  disableFieldSuffixes: string[] | undefined;
+  primaryKeyNames: string[] | undefined;
+  headFields: string[];
+  tailFields: string[];
 };
 
 const buildModelSchemas = (
@@ -103,9 +107,9 @@ const buildModelSchemas = (
 
     const result: ModelSchemas = {
       primaryKeys,
-      model: modelSchemas,
-      insertInput,
-      setInput,
+      model: sortFieldOrder(modelSchemas, options.headFields, options.tailFields),
+      insertInput: sortFieldOrder(insertInput, options.headFields, options.tailFields),
+      setInput: sortFieldOrder(setInput, options.headFields, options.tailFields),
       permissions: {
         get: modelSchemas.length > 0,
         insert: insertInput.length > 0,
@@ -169,7 +173,9 @@ const buildModelSchema = (
   const fieldMap = modelType.getFields();
   return Object.keys(fieldMap).reduce((acc, key) => {
     if (
-      options.disableFields?.some((disabledTerm) => key.includes(disabledTerm))
+      Boolean(options.disableFields?.includes(key)) ||
+      Boolean(options.disableFieldPrefixes?.some((disabledTerm) => key.startsWith(disabledTerm))) ||
+      Boolean(options.disableFieldSuffixes?.some((disabledTerm) => key.endsWith(disabledTerm))) 
     ) {
       return acc;
     }
@@ -190,5 +196,25 @@ const buildModelSchema = (
     return [...acc, schema];
   }, []);
 };
+
+const pickField = ([hs, remain]: [ModelFieldSchema[], ModelFieldSchema[]], name: string) => {
+  const field = remain.find((f) => f.name === name);
+  return !field ? [hs, remain] : [[
+    ...hs,
+    field
+  ], remain.filter((f) => f.name !== name)]
+}
+
+const sortFieldOrder = (fields: ModelFieldSchema[], headFields: string[], tailFields: string[]): ModelFieldSchema[] => {
+
+  const [head, excludeHead] = headFields.reduce(pickField, [[], fields]);  
+  const [tail, remain] = tailFields.reduce(pickField, [[], excludeHead]);  
+
+  return [
+    ...head,
+    ...remain,
+    ...tail
+  ]
+}
 
 export default buildModelSchemas;

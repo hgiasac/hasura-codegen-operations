@@ -68,12 +68,15 @@ const generate = async (actions: Action[], options: GenerateOptions) => {
       plugins: [
         {
           "graphql-codegen-hasura-graphql": {
-            tables: models,
+            models,
             disableOperationTypes,
             maxDepth: options.maxDepth,
             enableSubfieldArgs: options.enableSubfieldArgs,
             disableFragments: options.disableFragments,
             disableArgSuffixes: options.disableArgSuffixes,
+            disableFields: options.disableFields,
+            disableFieldPrefixes: options.disableFieldPrefixes,
+            disableFieldSuffixes: options.disableFieldSuffixes,
           },
         },
       ],
@@ -101,7 +104,11 @@ const generate = async (actions: Action[], options: GenerateOptions) => {
   if (actions.includes("template")) {
     const modelSchemas = buildModelSchemas(schema, models, {
       disableFields: options.disableFields,
+      disableFieldPrefixes: options.disableFieldPrefixes,
+      disableFieldSuffixes: options.disableFieldSuffixes,
       primaryKeyNames: options.primaryKeyNames,
+      headFields: options.headFields,
+      tailFields: options.tailFields,
     });
 
     // try to load extra prompt

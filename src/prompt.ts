@@ -25,7 +25,11 @@ type QuestionResult = {
   separateFiles: boolean;
   templatePath: string;
   disableFields: string[];
+  disableFieldPrefixes: string[];
+  disableFieldSuffixes: string[];
   primaryKeyNames: string[];
+  headFields: string[];
+  tailFields: string[];
 };
 
 export type GenerateOptions = QuestionResult & {
@@ -49,7 +53,7 @@ const actionQuestions = [
 ];
 
 const startPrompt = async (
-  defaultConfigs: Partial<GenerateOptions>
+  defaultConfigs: Partial<GenerateOptions>,
 ): Promise<[Action[], GenerateOptions]> => {
   const sharedQuestions = [
     !defaultConfigs.url
@@ -92,6 +96,51 @@ const startPrompt = async (
         return true;
       },
     },
+    defaultConfigs.silent && defaultConfigs.disableFields !== undefined
+      ? null
+      : {
+          type: "input",
+          name: "disableFields",
+          message: "What fields should we exclude from models?",
+          initial: defaultConfigs.disableFields?.join(",") ?? "",
+          result: parseArrayString,
+          validate(value: string): string | boolean {
+            if (value && !PATTERN_NAMES_WITH_COMMA.test(value)) {
+              return "disableFields format is invalid";
+            }
+            return true;
+          },
+        },
+    defaultConfigs.silent && defaultConfigs.disableFieldPrefixes !== undefined
+      ? null
+      : {
+          type: "input",
+          name: "disableFieldPrefixes",
+          message: "What field prefixes should we exclude from models?",
+          initial: defaultConfigs.disableFieldPrefixes?.join(",") ?? "",
+          result: parseArrayString,
+          validate(value: string): string | boolean {
+            if (value && !PATTERN_NAMES_WITH_COMMA.test(value)) {
+              return "disableFieldPrefixes format is invalid";
+            }
+            return true;
+          },
+        },
+    defaultConfigs.silent && defaultConfigs.disableFieldSuffixes !== undefined
+      ? null
+      : {
+          type: "input",
+          name: "disableFieldSuffixes",
+          message: "What field suffixes should we exclude from models?",
+          initial: defaultConfigs.disableFieldSuffixes?.join(",") ?? "",
+          result: parseArrayString,
+          validate(value: string): string | boolean {
+            if (value && !PATTERN_NAMES_WITH_COMMA.test(value)) {
+              return "disableFieldSuffixes format is invalid";
+            }
+            return true;
+          },
+        },
   ];
 
   const graphqlQuestions = [
@@ -217,36 +266,54 @@ const startPrompt = async (
   ].filter((m) => m);
 
   const templateQuestions = [
-    defaultConfigs.silent && defaultConfigs.disableFields !== undefined
+    defaultConfigs.silent && defaultConfigs.primaryKeyNames !== undefined
       ? null
       : {
           type: "input",
-          name: "disableFields",
-          message: "What fields should we exclude from models?",
-          initial: defaultConfigs.disableFields?.join(",") ?? "",
+          name: "primaryKeyNames",
+          message:
+            "What fallback primary key names should we use if no insert and update permissions?",
+          initial: defaultConfigs.primaryKeyNames?.join(",") ?? "id",
           result: parseArrayString,
           validate(value: string): string | boolean {
             if (value && !PATTERN_NAMES_WITH_COMMA.test(value)) {
-              return "disableFields format is invalid";
+              return "primaryKeyNames format is invalid";
             }
             return true;
           },
         },
-      defaultConfigs.silent && defaultConfigs.primaryKeyNames !== undefined
-        ? null
-        : {
-            type: "input",
-            name: "primaryKeyNames",
-            message: "What fallback primary key names should we use if no insert and update permissions?",
-            initial: defaultConfigs.primaryKeyNames?.join(",") ?? "id",
-            result: parseArrayString,
-            validate(value: string): string | boolean {
-              if (value && !PATTERN_NAMES_WITH_COMMA.test(value)) {
-                return "primaryKeyNames format is invalid";
-              }
-              return true;
-            },
+    defaultConfigs.silent && defaultConfigs.headFields !== undefined
+      ? null
+      : {
+          type: "input",
+          name: "headFields",
+          message:
+            "What fields should we display first?",
+          initial: defaultConfigs.headFields?.join(",") ?? "",
+          result: parseArrayString,
+          validate(value: string): string | boolean {
+            if (value && !PATTERN_NAMES_WITH_COMMA.test(value)) {
+              return "headFields format is invalid";
+            }
+            return true;
           },
+        },
+    defaultConfigs.silent && defaultConfigs.tailFields !== undefined
+    ? null
+    : {
+        type: "input",
+        name: "tailFields",
+        message:
+          "What fields should we display last?",
+        initial: defaultConfigs.tailFields?.join(",") ?? "",
+        result: parseArrayString,
+        validate(value: string): string | boolean {
+          if (value && !PATTERN_NAMES_WITH_COMMA.test(value)) {
+            return "tailFields format is invalid";
+          }
+          return true;
+        },
+      },
     defaultConfigs.silent && defaultConfigs.templatePath !== undefined
       ? null
       : {
