@@ -13,3 +13,7 @@ yarn-error.log*
 *.yaml
 *.yml
 *.graphql
+
+/_templates
+/output
+/.hygen.js
