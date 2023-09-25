@@ -21,9 +21,10 @@ import renderTemplate from "./template";
 import buildModelSchemas from "./schema";
 import startPrompt, { Action, GenerateOptions } from "./prompt";
 import { prompt } from "enquirer";
+import { parallel } from "radash";
 
 const generate = async (actions: Action[], options: GenerateOptions) => {
-  console.log("rendering files...");
+  console.log("\nprepare rendering files...");
 
   const url = options.url;
   const adminSecret = options.adminSecret;
@@ -123,22 +124,20 @@ const generate = async (actions: Action[], options: GenerateOptions) => {
       }
     }
 
-    await Promise.all(
-      Object.keys(modelSchemas).map((modelName) =>
-        renderTemplate(
-          {
-            actionfolder: options.templatePath,
-            modelName,
-            ...modelSchemas[modelName],
-            ...templateArguments,
-          },
-          {},
-        ),
+    await parallel(1, Object.keys(modelSchemas), (modelName) =>
+      renderTemplate(
+        {
+          actionfolder: options.templatePath,
+          modelName,
+          ...modelSchemas[modelName],
+          ...templateArguments,
+        },
+        {},
       ),
     );
   }
 
-  console.log("Outputs generated!");
+  console.log("\nOutputs generated!");
 };
 
 const bootstrap = async () => {
