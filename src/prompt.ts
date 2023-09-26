@@ -53,6 +53,7 @@ const actionQuestions = [
 ];
 
 const startPrompt = async (
+  actionArg: Action | undefined,
   defaultConfigs: Partial<GenerateOptions>,
 ): Promise<[Action[], GenerateOptions]> => {
   const sharedQuestions = [
@@ -330,18 +331,23 @@ const startPrompt = async (
         },
   ].filter((s) => s);
 
-  const actionAnswer = await prompt<{ action: Action }>(actionQuestions);
-  const actions = parseActions(actionAnswer.action);
+  if (actionArg) {
+    console.log(`running command with action: ${actionArg}`);
+  }
+  
+  const actionAnswer = actionArg ?? (await prompt<{ action: Action }>(actionQuestions)).action;
+  const actions = parseActions(actionAnswer);
 
   const questions = (() => {
-    switch (actionAnswer.action) {
+    switch (actionAnswer) {
       case "graphql":
         return [...sharedQuestions, ...graphqlQuestions];
       case "template":
         return [...sharedQuestions, ...templateQuestions];
       case "all":
-      default:
         return [...sharedQuestions, ...graphqlQuestions, ...templateQuestions];
+      default:
+        throw new Error(`invalid action <${actionAnswer as string}>`)
     }
   })();
 

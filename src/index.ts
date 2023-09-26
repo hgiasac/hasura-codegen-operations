@@ -134,7 +134,10 @@ const generate = async (actions: Action[], options: GenerateOptions) => {
         },
         {},
       ),
-    );
+    ).catch((errors: AggregateError) => {
+      console.error(errors.errors)
+      process.exit(1);
+    });
   }
 
   console.log("\nOutputs generated!");
@@ -142,6 +145,7 @@ const generate = async (actions: Action[], options: GenerateOptions) => {
 
 const bootstrap = async () => {
   const argv = await yargs(hideBin(process.argv)).argv;
+  const cmdAction = (argv.action || argv._[0]) as Action | undefined;
 
   const envOutput = dotenvConfig();
 
@@ -149,7 +153,7 @@ const bootstrap = async () => {
     process.env.CONFIG_PATH ??
     (argv.config as string | undefined) ??
     "codegen.yml";
-  console.warn(`trying to read config file ${codegenConfigFile}...`);
+  console.warn(`\ntrying to read config file ${codegenConfigFile}...`);
 
   if (!existsSync(codegenConfigFile)) {
     codegenConfigFile = "codegen.yaml";
@@ -208,7 +212,7 @@ const bootstrap = async () => {
     }
   }
 
-  return startPrompt(defaultConfigs)
+  return startPrompt(cmdAction, defaultConfigs)
     .then(([actions, options]) => generate(actions, options))
     .catch((err) => {
       console.error("failed to generate: ", err.message);
